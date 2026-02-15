@@ -7,4 +7,4 @@ numpy==2.2.1
 ta==0.11.0
 apscheduler==3.10.4
 python-dotenv==1.0.1
-resend==2.5.0
+resend>=2.0.0
