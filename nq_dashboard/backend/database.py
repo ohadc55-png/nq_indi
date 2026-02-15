@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from config import DB_PATH
+from dashboard_config import DB_PATH
 
 logger = logging.getLogger(__name__)
 

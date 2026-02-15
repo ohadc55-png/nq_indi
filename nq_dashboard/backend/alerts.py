@@ -4,7 +4,7 @@ import logging
 
 import resend
 
-from config import RESEND_API_KEY, EMAIL_RECIPIENT
+from dashboard_config import RESEND_API_KEY, EMAIL_RECIPIENT
 
 logger = logging.getLogger(__name__)
 

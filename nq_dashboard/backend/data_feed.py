@@ -6,7 +6,7 @@ from datetime import datetime
 import pandas as pd
 import yfinance as yf
 
-from config import TICKER, INTERVAL, FETCH_PERIOD, UPDATE_PERIOD
+from dashboard_config import TICKER, INTERVAL, FETCH_PERIOD, UPDATE_PERIOD
 
 logger = logging.getLogger(__name__)
 

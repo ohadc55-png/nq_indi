@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import HOST, PORT, INITIAL_CAPITAL
+from dashboard_config import HOST, PORT, INITIAL_CAPITAL
 from data_feed import DataFeed
 from indicator_engine import IndicatorEngine
 from paper_trader import PaperTrader
