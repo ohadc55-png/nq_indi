@@ -250,6 +250,14 @@ def _is_nan(val) -> bool:
         return True
 
 
+# ─── Reports Static Files ────────────────────────────────────
+
+REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
+
+if REPORTS_DIR.is_dir():
+    app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR), html=True), name="reports")
+
+
 # ─── Frontend Static Files ──────────────────────────────────
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
