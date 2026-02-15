@@ -22,7 +22,7 @@ class TradingScheduler:
         self.scheduler.add_job(
             self.tick,
             "cron",
-            day_of_week="sun-fri",
+            day_of_week="mon,tue,wed,thu,fri,sun",
             minute="0,15,30,45",
             timezone="US/Eastern",
             id="main_tick",
