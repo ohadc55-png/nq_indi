@@ -4,9 +4,12 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from dashboard_config import HOST, PORT, INITIAL_CAPITAL
 from data_feed import DataFeed
@@ -245,6 +248,18 @@ def _is_nan(val) -> bool:
         return math.isnan(float(val))
     except (ValueError, TypeError):
         return True
+
+
+# ─── Frontend Static Files ──────────────────────────────────
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIR.is_dir():
+    @app.get("/")
+    async def serve_root():
+        return FileResponse(FRONTEND_DIR / "index.html")
+
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 
 
 if __name__ == "__main__":
