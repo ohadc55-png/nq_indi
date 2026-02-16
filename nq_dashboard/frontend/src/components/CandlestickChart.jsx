@@ -1,5 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart } from 'lightweight-charts';
+
+const TIMEFRAMES = ['5m', '15m', '1H'];
 
 export default function CandlestickChart({ position }) {
   const chartRef = useRef(null);
@@ -10,8 +12,75 @@ export default function CandlestickChart({ position }) {
   const stRef = useRef(null);
   const priceLines = useRef([]);
   const [loaded, setLoaded] = useState(false);
+  const [timeframe, setTimeframe] = useState('15m');
 
-  // Initialize chart
+  const loadCandles = useCallback((chart, candleSeries, ema50, ema200, st, tf) => {
+    const interval = tf.toLowerCase();
+    fetch(`/api/candles?interval=${interval}&limit=400`)
+      .then(r => r.json())
+      .then(candles => {
+        if (!Array.isArray(candles) || candles.length === 0) return;
+
+        candleSeries.setData(candles.map(c => ({
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        })));
+
+        const ema50Data = candles.filter(c => c.ema50 != null).map(c => ({ time: c.time, value: c.ema50 }));
+        const ema200Data = candles.filter(c => c.ema200 != null).map(c => ({ time: c.time, value: c.ema200 }));
+        const stData = candles.filter(c => c.supertrend != null).map(c => ({ time: c.time, value: c.supertrend }));
+
+        ema50.setData(ema50Data);
+        ema200.setData(ema200Data);
+        st.setData(stData);
+
+        // Trade markers only on 15m (signal timeframe)
+        if (tf === '15m') {
+          fetch('/api/trades')
+            .then(r => r.json())
+            .then(trades => {
+              if (!Array.isArray(trades)) return;
+              const markers = [];
+              for (const trade of trades) {
+                if (trade.entry_time) {
+                  const entryTs = Math.floor(new Date(trade.entry_time).getTime() / 1000);
+                  markers.push({
+                    time: entryTs,
+                    position: 'belowBar',
+                    color: '#10b981',
+                    shape: 'arrowUp',
+                    text: `L ${(trade.entry_score || 0).toFixed(1)}`,
+                  });
+                }
+                if (trade.exit_time) {
+                  const exitTs = Math.floor(new Date(trade.exit_time).getTime() / 1000);
+                  markers.push({
+                    time: exitTs,
+                    position: 'aboveBar',
+                    color: trade.total_pnl > 0 ? '#10b981' : '#ef4444',
+                    shape: 'arrowDown',
+                    text: `$${Math.round(trade.total_pnl || 0)}`,
+                  });
+                }
+              }
+              markers.sort((a, b) => a.time - b.time);
+              if (markers.length) candleSeries.setMarkers(markers);
+            })
+            .catch(() => {});
+        } else {
+          candleSeries.setMarkers([]);
+        }
+
+        setLoaded(true);
+        chart.timeScale().fitContent();
+      })
+      .catch(err => console.error('Failed to load candles:', err));
+  }, []);
+
+  // Initialize chart (once)
   useEffect(() => {
     if (!chartRef.current) return;
 
@@ -82,67 +151,9 @@ export default function CandlestickChart({ position }) {
     ema200Ref.current = ema200;
     stRef.current = st;
 
-    // Fetch candles
-    fetch('/api/candles?limit=400')
-      .then(r => r.json())
-      .then(candles => {
-        if (!Array.isArray(candles) || candles.length === 0) return;
+    // Load initial candles (15m)
+    loadCandles(chart, candleSeries, ema50, ema200, st, '15m');
 
-        candleSeries.setData(candles.map(c => ({
-          time: c.time,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        })));
-
-        const ema50Data = candles.filter(c => c.ema50 != null).map(c => ({ time: c.time, value: c.ema50 }));
-        const ema200Data = candles.filter(c => c.ema200 != null).map(c => ({ time: c.time, value: c.ema200 }));
-        const stData = candles.filter(c => c.supertrend != null).map(c => ({ time: c.time, value: c.supertrend }));
-
-        if (ema50Data.length) ema50.setData(ema50Data);
-        if (ema200Data.length) ema200.setData(ema200Data);
-        if (stData.length) st.setData(stData);
-
-        // Fetch trades for markers
-        fetch('/api/trades')
-          .then(r => r.json())
-          .then(trades => {
-            if (!Array.isArray(trades)) return;
-            const markers = [];
-            for (const trade of trades) {
-              if (trade.entry_time) {
-                const entryTs = Math.floor(new Date(trade.entry_time).getTime() / 1000);
-                markers.push({
-                  time: entryTs,
-                  position: 'belowBar',
-                  color: '#10b981',
-                  shape: 'arrowUp',
-                  text: `L ${(trade.entry_score || 0).toFixed(1)}`,
-                });
-              }
-              if (trade.exit_time) {
-                const exitTs = Math.floor(new Date(trade.exit_time).getTime() / 1000);
-                markers.push({
-                  time: exitTs,
-                  position: 'aboveBar',
-                  color: trade.total_pnl > 0 ? '#10b981' : '#ef4444',
-                  shape: 'arrowDown',
-                  text: `$${Math.round(trade.total_pnl || 0)}`,
-                });
-              }
-            }
-            markers.sort((a, b) => a.time - b.time);
-            if (markers.length) candleSeries.setMarkers(markers);
-          })
-          .catch(() => {});
-
-        setLoaded(true);
-        chart.timeScale().fitContent();
-      })
-      .catch(err => console.error('Failed to load candles:', err));
-
-    // Resize handler
     const handleResize = () => {
       if (chartRef.current) {
         chart.applyOptions({ width: chartRef.current.clientWidth });
@@ -154,13 +165,25 @@ export default function CandlestickChart({ position }) {
       window.removeEventListener('resize', handleResize);
       chart.remove();
     };
-  }, []);
+  }, [loadCandles]);
+
+  // Reload candles when timeframe changes
+  useEffect(() => {
+    if (!chartInstance.current || !candleSeriesRef.current) return;
+    loadCandles(
+      chartInstance.current,
+      candleSeriesRef.current,
+      ema50Ref.current,
+      ema200Ref.current,
+      stRef.current,
+      timeframe,
+    );
+  }, [timeframe, loadCandles]);
 
   // Update position lines
   useEffect(() => {
     if (!candleSeriesRef.current || !loaded) return;
 
-    // Remove old price lines
     for (const line of priceLines.current) {
       try { candleSeriesRef.current.removePriceLine(line); } catch {}
     }
@@ -168,7 +191,6 @@ export default function CandlestickChart({ position }) {
 
     if (!position) return;
 
-    // Entry line
     priceLines.current.push(
       candleSeriesRef.current.createPriceLine({
         price: position.entry_price,
@@ -179,7 +201,6 @@ export default function CandlestickChart({ position }) {
       })
     );
 
-    // SL line
     priceLines.current.push(
       candleSeriesRef.current.createPriceLine({
         price: position.sl_price,
@@ -190,7 +211,6 @@ export default function CandlestickChart({ position }) {
       })
     );
 
-    // TP1 line
     priceLines.current.push(
       candleSeriesRef.current.createPriceLine({
         price: position.tp1_price,
@@ -201,7 +221,6 @@ export default function CandlestickChart({ position }) {
       })
     );
 
-    // Trailing stop (if TP1 hit)
     if (position.tp1_hit && position.trail_stop) {
       priceLines.current.push(
         candleSeriesRef.current.createPriceLine({
@@ -217,6 +236,17 @@ export default function CandlestickChart({ position }) {
 
   return (
     <div className="panel" style={{ padding: 0 }}>
+      <div className="timeframe-bar">
+        {TIMEFRAMES.map(tf => (
+          <button
+            key={tf}
+            className={`tf-btn ${timeframe === tf ? 'active' : ''}`}
+            onClick={() => setTimeframe(tf)}
+          >
+            {tf}
+          </button>
+        ))}
+      </div>
       <div ref={chartRef} style={{ width: '100%', minHeight: 500 }} />
     </div>
   );

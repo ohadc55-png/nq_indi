@@ -2,9 +2,14 @@
 
 import asyncio
 import logging
+import math
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
+import yfinance as yf
+from ta.trend import EMAIndicator
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -172,45 +177,102 @@ async def health():
 
 
 @app.get("/api/candles")
-async def get_candles(limit: int = 200):
-    """Return last N candles for chart initialization."""
+async def get_candles(limit: int = 200, interval: str = "15m"):
+    """Return last N candles, optionally resampled to a different timeframe."""
+
+    if interval == "5m":
+        return await _fetch_5m_candles(limit)
+
     df = data_feed.get_dataframe()
     if df.empty:
         return []
 
-    # Run indicators to get enriched data
-    enriched = engine.process_full(df)
-    if enriched is None or enriched.empty:
-        # Fallback: raw candles
-        df_tail = df.tail(limit)
-        candles = []
-        for ts, row in df_tail.iterrows():
-            candles.append({
-                "time": int(ts.timestamp()),
-                "open": round(float(row["Open"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-                "close": round(float(row["Close"]), 2),
-                "volume": int(row["Volume"]),
-            })
-        return candles
+    if interval == "15m":
+        # Default: run full indicator pipeline
+        enriched = engine.process_full(df)
+        if enriched is None or enriched.empty:
+            return _df_to_candles(df.tail(limit))
+        return _df_to_candles(enriched.tail(limit), enriched=True)
 
-    df_tail = enriched.tail(limit)
+    if interval == "1h":
+        resampled = _resample_df(df, "1h")
+        return _df_to_candles(resampled.tail(limit), enriched=True)
+
+    return []
+
+
+def _resample_df(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    """Resample 15m data to a larger timeframe and add basic indicators."""
+    rule = {"30m": "30min", "1h": "1h", "4h": "4h"}.get(interval, "1h")
+
+    ohlcv = df.resample(rule).agg({
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum",
+    }).dropna(subset=["Close"])
+
+    # Compute basic indicators on resampled data
+    if len(ohlcv) >= 50:
+        ohlcv["ema50"] = EMAIndicator(ohlcv["Close"], window=50).ema_indicator()
+    if len(ohlcv) >= 200:
+        ohlcv["ema200"] = EMAIndicator(ohlcv["Close"], window=200).ema_indicator()
+
+    return ohlcv
+
+
+async def _fetch_5m_candles(limit: int) -> list:
+    """Fetch 5m candles on-demand from yfinance (last 5 days max)."""
+    try:
+        loop = asyncio.get_event_loop()
+        df = await loop.run_in_executor(None, _yf_fetch_5m)
+        if df.empty:
+            return []
+
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        # Add basic EMAs
+        if len(df) >= 50:
+            df["ema50"] = EMAIndicator(df["Close"], window=50).ema_indicator()
+        if len(df) >= 200:
+            df["ema200"] = EMAIndicator(df["Close"], window=200).ema_indicator()
+
+        return _df_to_candles(df.tail(limit), enriched=True)
+    except Exception as e:
+        logger.error("5m fetch failed: %s", e)
+        return []
+
+
+def _yf_fetch_5m() -> pd.DataFrame:
+    """Blocking yfinance call for 5m data."""
+    from dashboard_config import TICKER
+    return yf.download(TICKER, period="5d", interval="5m", progress=False, timeout=30)
+
+
+def _df_to_candles(df: pd.DataFrame, enriched: bool = False) -> list:
+    """Convert a DataFrame to the candle JSON format."""
     candles = []
-    for ts, row in df_tail.iterrows():
-        candles.append({
+    for ts, row in df.iterrows():
+        c = {
             "time": int(ts.timestamp()),
             "open": round(float(row["Open"]), 2),
             "high": round(float(row["High"]), 2),
             "low": round(float(row["Low"]), 2),
             "close": round(float(row["Close"]), 2),
             "volume": int(row["Volume"]),
-            "ema50": round(float(row.get("ema50", 0)), 2) if not _is_nan(row.get("ema50")) else None,
-            "ema200": round(float(row.get("ema200", 0)), 2) if not _is_nan(row.get("ema200")) else None,
-            "supertrend": round(float(row.get("st_line", 0)), 2) if not _is_nan(row.get("st_line")) else None,
-            "st_bullish": bool(row.get("st_bullish", False)),
-            "vwap": round(float(row.get("vwap", 0)), 2) if not _is_nan(row.get("vwap")) else None,
-        })
+        }
+        if enriched:
+            c["ema50"] = round(float(row["ema50"]), 2) if not _is_nan(row.get("ema50")) else None
+            c["ema200"] = round(float(row["ema200"]), 2) if not _is_nan(row.get("ema200")) else None
+            c["supertrend"] = round(float(row["st_line"]), 2) if not _is_nan(row.get("st_line")) else None
+            c["st_bullish"] = bool(row.get("st_bullish", False))
+            c["vwap"] = round(float(row["vwap"]), 2) if not _is_nan(row.get("vwap")) else None
+        candles.append(c)
     return candles
 
 
@@ -251,7 +313,6 @@ def _is_nan(val) -> bool:
     if val is None:
         return True
     try:
-        import math
         return math.isnan(float(val))
     except (ValueError, TypeError):
         return True
