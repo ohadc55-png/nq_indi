@@ -18,11 +18,10 @@ class TradingScheduler:
         self._open_trade_id = None  # DB trade ID for current open position
 
     def start(self):
-        # Run every 15 minutes during futures market hours
+        # Run every 15 minutes, every day (futures trade Sun-Fri + holidays vary)
         self.scheduler.add_job(
             self.tick,
             "cron",
-            day_of_week="mon,tue,wed,thu,fri,sun",
             minute="0,15,30,45",
             timezone="US/Eastern",
             id="main_tick",
