@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
 from ta.trend import EMAIndicator
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -16,8 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from dashboard_config import HOST, PORT, INITIAL_CAPITAL
-from data_feed import DataFeed
+from dashboard_config import HOST, PORT, INITIAL_CAPITAL, TICKER
+from data_feed import DataFeed, fetch_5m_candles
 from indicator_engine import IndicatorEngine
 from paper_trader import PaperTrader
 from database import Database
@@ -223,18 +222,12 @@ def _resample_df(df: pd.DataFrame, interval: str) -> pd.DataFrame:
 
 
 async def _fetch_5m_candles(limit: int) -> list:
-    """Fetch 5m candles on-demand from yfinance (last 5 days max)."""
+    """Fetch 5m candles on-demand (last 5 trading days)."""
     try:
         loop = asyncio.get_event_loop()
-        df = await loop.run_in_executor(None, _yf_fetch_5m)
+        df = await loop.run_in_executor(None, fetch_5m_candles, TICKER)
         if df.empty:
             return []
-
-        if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
-
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
 
         # Add basic EMAs
         if len(df) >= 50:
@@ -246,12 +239,6 @@ async def _fetch_5m_candles(limit: int) -> list:
     except Exception as e:
         logger.error("5m fetch failed: %s", e)
         return []
-
-
-def _yf_fetch_5m() -> pd.DataFrame:
-    """Blocking yfinance call for 5m data."""
-    from dashboard_config import TICKER
-    return yf.download(TICKER, period="5d", interval="5m", progress=False, timeout=30)
 
 
 def _df_to_candles(df: pd.DataFrame, enriched: bool = False) -> list:
