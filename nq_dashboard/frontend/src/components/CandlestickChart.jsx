@@ -3,7 +3,7 @@ import { createChart } from 'lightweight-charts';
 
 const TIMEFRAMES = ['5m', '15m', '1H'];
 
-export default function CandlestickChart({ position }) {
+export default function CandlestickChart({ position, livePrice }) {
   const chartRef = useRef(null);
   const chartInstance = useRef(null);
   const candleSeriesRef = useRef(null);
@@ -11,6 +11,7 @@ export default function CandlestickChart({ position }) {
   const ema200Ref = useRef(null);
   const stRef = useRef(null);
   const priceLines = useRef([]);
+  const livePriceLineRef = useRef(null);
   const [loaded, setLoaded] = useState(false);
   const [timeframe, setTimeframe] = useState('15m');
 
@@ -233,6 +234,24 @@ export default function CandlestickChart({ position }) {
       );
     }
   }, [position, loaded]);
+
+  // Update live price line
+  useEffect(() => {
+    if (!candleSeriesRef.current || !loaded || !livePrice) return;
+
+    if (livePriceLineRef.current) {
+      livePriceLineRef.current.applyOptions({ price: livePrice });
+    } else {
+      livePriceLineRef.current = candleSeriesRef.current.createPriceLine({
+        price: livePrice,
+        color: '#22d3ee',
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: '',
+      });
+    }
+  }, [livePrice, loaded]);
 
   return (
     <div className="panel" style={{ padding: 0 }}>

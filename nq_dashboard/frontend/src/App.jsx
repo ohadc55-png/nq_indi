@@ -28,7 +28,8 @@ export default function App() {
   const position = state?.position;
   const stats = state?.stats;
   const lastBar = state?.last_bar;
-  const currentPrice = lastBar?.Close ?? signal?.close;
+  const livePrice = state?.live_price;
+  const currentPrice = livePrice ?? lastBar?.Close ?? signal?.close;
 
   return (
     <div className="dashboard">
@@ -39,7 +40,7 @@ export default function App() {
       />
 
       <div className="main-content">
-        <CandlestickChart position={position} />
+        <CandlestickChart position={position} livePrice={livePrice} />
 
         <div className="sidebar">
           <ScoreGauge

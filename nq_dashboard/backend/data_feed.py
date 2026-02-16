@@ -155,11 +155,16 @@ def fetch_5m_candles(symbol: str) -> pd.DataFrame:
 
 # ── DataFeed class ────────────────────────────────────────────
 
+LIVE_PRICE_CACHE_TTL = 30  # seconds
+
+
 class DataFeed:
     def __init__(self):
         self.df = pd.DataFrame()
         self.last_update = None
         self.ticker = TICKER
+        self._cached_price: float | None = None
+        self._cached_price_ts: float = 0
 
     async def initialize(self):
         """Fetch initial 60 days of 15m data for indicator warm-up."""
@@ -290,6 +295,20 @@ class DataFeed:
             "Synthetic bar at %s  price=%.2f (live quote)", bar_time, price
         )
         return 1
+
+    # ── Live price (cached) ──────────────────────────────────
+
+    def get_live_price(self) -> float | None:
+        """Return the current market price, cached for 30 seconds."""
+        now = time.monotonic()
+        if now - self._cached_price_ts < LIVE_PRICE_CACHE_TTL and self._cached_price is not None:
+            return self._cached_price
+
+        quote = _get_live_quote(self.ticker)
+        if quote:
+            self._cached_price = quote["price"]
+            self._cached_price_ts = now
+        return self._cached_price
 
     # ── Accessors ─────────────────────────────────────────────
 

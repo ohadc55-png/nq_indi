@@ -66,6 +66,7 @@ def get_current_state() -> dict:
         "stats": paper_trader.get_stats(),
         "capital": paper_trader.capital,
         "last_bar": data_feed.get_latest_bar(),
+        "live_price": data_feed.get_live_price(),
         "trade_count": paper_trader.trade_count,
     }
 
