@@ -50,6 +50,11 @@ class TradingScheduler:
     async def tick(self):
         """Main loop — runs every 15 minutes."""
         try:
+            # Recovery: if data feed is empty, re-initialize with full history
+            if self.data_feed.get_dataframe().empty:
+                logger.info("Data feed empty — attempting full re-initialize...")
+                await self.data_feed.initialize()
+
             # 1. Fetch new data
             new_bars = await self.data_feed.update()
             logger.info("Tick: %d new bars fetched", new_bars)

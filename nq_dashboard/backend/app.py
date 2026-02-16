@@ -161,7 +161,14 @@ async def websocket_endpoint(ws: WebSocket):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "time": datetime.now().isoformat()}
+    df = data_feed.get_dataframe()
+    return {
+        "status": "ok",
+        "time": datetime.now().isoformat(),
+        "bars": len(df),
+        "last_bar": str(data_feed.last_update) if data_feed.last_update else None,
+        "has_signal": last_signal_data is not None,
+    }
 
 
 @app.get("/api/candles")
