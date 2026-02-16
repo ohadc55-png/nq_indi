@@ -165,6 +165,11 @@ class DataFeed:
         self.ticker = TICKER
         self._cached_price: float | None = None
         self._cached_price_ts: float = 0
+        # OHLC accumulator for the current synthetic bar window.
+        self._acc_bar_time: datetime | None = None
+        self._acc_open: float = 0
+        self._acc_high: float = 0
+        self._acc_low: float = 0
 
     async def initialize(self):
         """Fetch initial 60 days of 15m data for indicator warm-up."""
@@ -232,8 +237,71 @@ class DataFeed:
 
     # ── Synthetic bar from live quote ─────────────────────────
 
+    def _bar_time_for(self, dt: datetime) -> datetime:
+        """Floor *dt* to the nearest interval boundary."""
+        interval_min = _INTERVAL_MINUTES.get(INTERVAL, 15)
+        floored = dt.minute - (dt.minute % interval_min)
+        return dt.replace(minute=floored, second=0, microsecond=0)
+
+    def _accumulate_price(self, price: float, quote_epoch: int) -> None:
+        """Feed a live price tick into the OHLC accumulator.
+
+        If the price falls into a new bar window, the previous window is
+        flushed to self.df and a new accumulator window starts.
+        """
+        live_dt = datetime.fromtimestamp(
+            quote_epoch, tz=timezone.utc
+        ).replace(tzinfo=None)
+        bar_time = self._bar_time_for(live_dt)
+
+        if bar_time != self._acc_bar_time:
+            # ── new window ──────────────────────────────────
+            # Flush the old window into the DataFrame (if any).
+            if self._acc_bar_time is not None and not self.df.empty:
+                self._flush_accumulator()
+
+            self._acc_bar_time = bar_time
+            self._acc_open = price
+            self._acc_high = price
+            self._acc_low = price
+        else:
+            # ── same window — update H/L ─────────────────────
+            self._acc_high = max(self._acc_high, price)
+            self._acc_low = min(self._acc_low, price)
+
+        # Update the synthetic row in the DataFrame so the chart shows
+        # the bar growing in real-time.
+        if self.df.empty or self.last_update is None:
+            return
+
+        # Don't overwrite real candles (those have Volume > 0).
+        if bar_time in self.df.index and int(self.df.at[bar_time, "Volume"]) > 0:
+            return
+
+        # Only create/update bars that are >= the last known bar time.
+        if bar_time < self.last_update:
+            return
+
+        self.df.loc[bar_time] = {
+            "Open": self._acc_open,
+            "High": self._acc_high,
+            "Low": self._acc_low,
+            "Close": price,
+            "Volume": 0,
+        }
+        self.df.sort_index(inplace=True)
+
+        if bar_time > self.last_update:
+            self.last_update = bar_time
+
+    def _flush_accumulator(self) -> None:
+        """Write the accumulated OHLC bar into self.df."""
+        if self._acc_bar_time is None:
+            return
+        # The bar is already in self.df (updated live), nothing extra to do.
+
     async def _try_synthetic_bar(self) -> int:
-        """Create a synthetic candle from the Yahoo real-time quote.
+        """Create / update a synthetic candle from the Yahoo real-time quote.
 
         This covers holiday / abbreviated sessions where Yahoo returns a
         live ``regularMarketPrice`` but no new intraday candles.
@@ -252,54 +320,32 @@ class DataFeed:
         if not quote:
             return 0
 
-        # Convert Unix epoch → naive-UTC datetime (matching candle index).
-        live_dt = datetime.fromtimestamp(quote["time"], tz=timezone.utc).replace(
-            tzinfo=None
-        )
-
-        interval_min = _INTERVAL_MINUTES.get(INTERVAL, 15)
-        gap_minutes = (live_dt - self.last_update).total_seconds() / 60
-
-        if gap_minutes < interval_min:
-            return 0  # quote is within the current candle window
-
-        # Align to the interval grid (floor to nearest interval).
-        floored_min = live_dt.minute - (live_dt.minute % interval_min)
-        bar_time = live_dt.replace(minute=floored_min, second=0, microsecond=0)
-
-        if bar_time <= self.last_update:
-            return 0  # already covered
-
-        price = quote["price"]
-        synthetic = pd.DataFrame(
-            {
-                "Open": [price],
-                "High": [price],
-                "Low": [price],
-                "Close": [price],
-                "Volume": [0],
-            },
-            index=pd.DatetimeIndex([bar_time]),
-        )
-
-        self.df = pd.concat([self.df, synthetic])
-        self.df = self.df[~self.df.index.duplicated(keep="last")]
-        self.df.sort_index(inplace=True)
-        self.last_update = bar_time
+        old_last = self.last_update
+        self._accumulate_price(quote["price"], quote["time"])
 
         # Trim.
-        cutoff = self.last_update - pd.Timedelta(days=60)
-        self.df = self.df[self.df.index >= cutoff]
-
-        logger.info(
-            "Synthetic bar at %s  price=%.2f (live quote)", bar_time, price
-        )
-        return 1
+        if self.last_update and self.last_update != old_last:
+            cutoff = self.last_update - pd.Timedelta(days=60)
+            self.df = self.df[self.df.index >= cutoff]
+            logger.info(
+                "Synthetic bar at %s  O=%.2f H=%.2f L=%.2f C=%.2f",
+                self.last_update,
+                self._acc_open,
+                self._acc_high,
+                self._acc_low,
+                quote["price"],
+            )
+            return 1
+        return 0
 
     # ── Live price (cached) ──────────────────────────────────
 
     def get_live_price(self) -> float | None:
-        """Return the current market price, cached for 30 seconds."""
+        """Return the current market price, cached for 30 seconds.
+
+        As a side-effect, feeds every fresh price tick into the OHLC
+        accumulator so synthetic bars develop proper High/Low spread.
+        """
         now = time.monotonic()
         if now - self._cached_price_ts < LIVE_PRICE_CACHE_TTL and self._cached_price is not None:
             return self._cached_price
@@ -308,6 +354,8 @@ class DataFeed:
         if quote:
             self._cached_price = quote["price"]
             self._cached_price_ts = now
+            # Feed into accumulator → builds OHLC over time.
+            self._accumulate_price(quote["price"], quote["time"])
         return self._cached_price
 
     # ── Accessors ─────────────────────────────────────────────
