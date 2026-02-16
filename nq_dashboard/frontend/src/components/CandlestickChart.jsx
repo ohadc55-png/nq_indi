@@ -12,6 +12,7 @@ export default function CandlestickChart({ position, livePrice }) {
   const stRef = useRef(null);
   const priceLines = useRef([]);
   const livePriceLineRef = useRef(null);
+  const initialFitDone = useRef(false);
   const [loaded, setLoaded] = useState(false);
   const [timeframe, setTimeframe] = useState('15m');
 
@@ -76,7 +77,10 @@ export default function CandlestickChart({ position, livePrice }) {
         }
 
         setLoaded(true);
-        chart.timeScale().fitContent();
+        if (!initialFitDone.current) {
+          initialFitDone.current = true;
+          chart.timeScale().fitContent();
+        }
       })
       .catch(err => console.error('Failed to load candles:', err));
   }, []);
@@ -171,6 +175,7 @@ export default function CandlestickChart({ position, livePrice }) {
   // Reload candles when timeframe changes
   useEffect(() => {
     if (!chartInstance.current || !candleSeriesRef.current) return;
+    initialFitDone.current = false;
     loadCandles(
       chartInstance.current,
       candleSeriesRef.current,
@@ -179,6 +184,22 @@ export default function CandlestickChart({ position, livePrice }) {
       stRef.current,
       timeframe,
     );
+  }, [timeframe, loadCandles]);
+
+  // Auto-refresh candles every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!chartInstance.current || !candleSeriesRef.current) return;
+      loadCandles(
+        chartInstance.current,
+        candleSeriesRef.current,
+        ema50Ref.current,
+        ema200Ref.current,
+        stRef.current,
+        timeframe,
+      );
+    }, 60_000);
+    return () => clearInterval(interval);
   }, [timeframe, loadCandles]);
 
   // Update position lines
